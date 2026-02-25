@@ -1,96 +1,94 @@
-import logging
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import telebot
 import os
+import time
+import threading
+from flask import Flask
 
 # Настройки
-OWNER_IDS = [756835347, 7768651103, 1877513295]  # СПИСОК ID владельцев
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8711050834:AAEWbit5d3Y5V9gtycADVFItze71_-3_PHk")
+BOT_TOKEN = "8711050834:AAEWbit5d3Y5V9gtycADVFItze71_-3_PHk"
+OWNER_IDS = [756835347, 7768651103, 1877513295]  # ID владельцев
 
-logging.basicConfig(level=logging.ERROR)
+# Создаём бота
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пересылает сообщение всем владельцам"""
-    
-    if not update or not update.effective_user or not update.message:
-        return
-    
-    user = update.effective_user
-    message = update.message
-    
+# Обработчик всех сообщений
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
     try:
-        user_id = user.id if user else "Неизвестно"
-        username = user.username if user and user.username else None
+        # Получаем информацию об отправителе
+        user = message.from_user
+        username = user.username
+        user_id = user.id
         
         if username:
             user_display = f"@{username}"
         else:
             user_display = f"ID: {user_id}"
-    except:
-        user_display = "Неизвестный пользователь"
-    
-    try:
+        
+        # Пересылаем всем владельцам
         for owner_id in OWNER_IDS:
             try:
+                # Текст
                 if message.text:
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=f"{message.text}\n{user_display}"
+                    bot.send_message(
+                        owner_id,
+                        f"{message.text}\n{user_display}"
                     )
+                # Фото
                 elif message.photo:
+                    file_id = message.photo[-1].file_id
                     caption = f"{message.caption if message.caption else ''}\n{user_display}"
-                    await context.bot.send_photo(
-                        chat_id=owner_id,
-                        photo=message.photo[-1].file_id,
-                        caption=caption
-                    )
+                    bot.send_photo(owner_id, file_id, caption=caption)
+                # Видео
                 elif message.video:
+                    file_id = message.video.file_id
                     caption = f"{message.caption if message.caption else ''}\n{user_display}"
-                    await context.bot.send_video(
-                        chat_id=owner_id,
-                        video=message.video.file_id,
-                        caption=caption
-                    )
+                    bot.send_video(owner_id, file_id, caption=caption)
+                # Документы
                 elif message.document:
+                    file_id = message.document.file_id
                     caption = f"{message.caption if message.caption else ''}\n{user_display}"
-                    await context.bot.send_document(
-                        chat_id=owner_id,
-                        document=message.document.file_id,
-                        caption=caption
-                    )
+                    bot.send_document(owner_id, file_id, caption=caption)
+                # Голосовые
                 elif message.voice:
-                    await context.bot.send_voice(
-                        chat_id=owner_id,
-                        voice=message.voice.file_id,
-                        caption=user_display
-                    )
+                    file_id = message.voice.file_id
+                    bot.send_voice(owner_id, file_id, caption=user_display)
+                # Стикеры
                 elif message.sticker:
-                    await context.bot.send_sticker(
-                        chat_id=owner_id,
-                        sticker=message.sticker.file_id
-                    )
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=user_display
-                    )
+                    file_id = message.sticker.file_id
+                    bot.send_sticker(owner_id, file_id)
+                    bot.send_message(owner_id, user_display)
+                # Остальное
                 else:
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=f"Сообщение (другой тип)\n{user_display}"
+                    bot.send_message(
+                        owner_id,
+                        f"Сообщение (другой тип)\n{user_display}"
                     )
             except Exception as e:
+                print(f"Ошибка отправки владельцу {owner_id}: {e}")
                 continue
         
-        await message.reply_text("✅")
+        # Отвечаем пользователю
+        bot.reply_to(message, "✅")
+        
     except Exception as e:
-        pass
+        print(f"Общая ошибка: {e}")
 
-def main():
+@app.route('/')
+def home():
+    return "Бот работает! 🤖"
+
+def bot_polling():
+    """Запуск бота в отдельном потоке"""
     print("🚀 Запуск бота...")
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
-    print("✅ Бот успешно запущен!")
-    app.run_polling()
+    bot.infinity_polling()
 
 if __name__ == '__main__':
-    main()
+    # Запускаем бота в фоновом потоке
+    bot_thread = threading.Thread(target=bot_polling, daemon=True)
+    bot_thread.start()
+    
+    # Запускаем Flask сервер (нужен для Render)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
