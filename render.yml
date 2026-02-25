@@ -2,8 +2,11 @@ services:
   - type: web
     name: telegram-forward-bot
     runtime: python
+    region: frankfurt
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    runtimeVersion: 3.11.11
     envVars:
       - key: BOT_TOKEN
         value: 8711050834:AAEWbit5d3Y5V9gtycADVFItze71_-3_PHk
