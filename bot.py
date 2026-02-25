@@ -1,97 +1,86 @@
-import logging
 import os
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import requests
+import time
+import threading
+from flask import Flask
 
-# Настройки
-OWNER_IDS = [756835347, 7768651103, 1877513295]  # СПИСОК ID владельцев
-# Берем токен из переменных окружения (так безопаснее!)
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8711867417:AAGtRrMSTN2_myn0iMmgnUh5le3lSKYFNQE")
+app = Flask(__name__)
 
-logging.basicConfig(level=logging.ERROR)
+# Конфигурация
+BOT_TOKEN = "8711050834:AAEWbit5d3Y5V9gtycADVFItze71_-3_PHk"
+OWNER_IDS = [756835347, 7768651103, 1877513295]
+last_update_id = 0
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пересылает сообщение всем владельцам"""
-    
-    if not update or not update.effective_user or not update.message:
-        return
-    
-    user = update.effective_user
-    message = update.message
-    
+def send_message(chat_id, text):
+    """Отправка сообщения через Telegram API"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        user_id = user.id if user else "Неизвестно"
-        username = user.username if user and user.username else None
-        
-        if username:
-            user_display = f"@{username}"
-        else:
-            user_display = f"ID: {user_id}"
+        requests.post(url, json={"chat_id": chat_id, "text": text})
     except:
-        user_display = "Неизвестный пользователь"
-    
-    try:
-        for owner_id in OWNER_IDS:
-            try:
-                if message.text:
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=f"{message.text}\n{user_display}"
-                    )
-                elif message.photo:
-                    caption = f"{message.caption if message.caption else ''}\n{user_display}"
-                    await context.bot.send_photo(
-                        chat_id=owner_id,
-                        photo=message.photo[-1].file_id,
-                        caption=caption
-                    )
-                elif message.video:
-                    caption = f"{message.caption if message.caption else ''}\n{user_display}"
-                    await context.bot.send_video(
-                        chat_id=owner_id,
-                        video=message.video.file_id,
-                        caption=caption
-                    )
-                elif message.document:
-                    caption = f"{message.caption if message.caption else ''}\n{user_display}"
-                    await context.bot.send_document(
-                        chat_id=owner_id,
-                        document=message.document.file_id,
-                        caption=caption
-                    )
-                elif message.voice:
-                    await context.bot.send_voice(
-                        chat_id=owner_id,
-                        voice=message.voice.file_id,
-                        caption=user_display
-                    )
-                elif message.sticker:
-                    await context.bot.send_sticker(
-                        chat_id=owner_id,
-                        sticker=message.sticker.file_id
-                    )
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=user_display
-                    )
-                else:
-                    await context.bot.send_message(
-                        chat_id=owner_id,
-                        text=f"Сообщение (другой тип)\n{user_display}"
-                    )
-            except Exception as e:
-                continue
-        
-        await message.reply_text("✅")
-    except Exception as e:
         pass
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+def handle_update(update):
+    """Обработка одного обновления"""
+    global last_update_id
     
-    print("Бот запущен и готов к работе!")
-    app.run_polling()
+    if "message" not in update:
+        return
+    
+    msg = update["message"]
+    chat_id = msg["chat"]["id"]
+    text = msg.get("text", "")
+    
+    # Информация об отправителе
+    user = msg.get("from", {})
+    username = user.get("username")
+    user_id = user.get("id")
+    user_display = f"@{username}" if username else f"ID: {user_id}"
+    
+    # Пересылаем владельцам
+    for owner_id in OWNER_IDS:
+        send_message(owner_id, f"{text}\n{user_display}")
+    
+    # Отвечаем пользователю
+    send_message(chat_id, "✅")
+
+def polling_worker():
+    """Фоновая задача для получения обновлений"""
+    global last_update_id
+    
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+            params = {
+                "offset": last_update_id + 1,
+                "timeout": 30
+            }
+            
+            response = requests.get(url, params=params, timeout=35)
+            data = response.json()
+            
+            if data.get("ok"):
+                for update in data.get("result", []):
+                    if update["update_id"] > last_update_id:
+                        last_update_id = update["update_id"]
+                        handle_update(update)
+                        
+        except Exception as e:
+            print(f"Polling error: {e}")
+            time.sleep(3)
+
+@app.route('/')
+def home():
+    return "Бот работает! 🚀"
+
+@app.route('/health')
+def health():
+    return "OK", 200
 
 if __name__ == '__main__':
-    main()
+    # Запускаем polling в отдельном потоке
+    thread = threading.Thread(target=polling_worker, daemon=True)
+    thread.start()
+    
+    # Запускаем веб-сервер
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
