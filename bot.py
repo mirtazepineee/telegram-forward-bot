@@ -23,74 +23,127 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе: {e}")
 
-# СПЕЦИАЛЬНЫЙ ОБРАБОТЧИК ТОЛЬКО ДЛЯ ФОТО
+# Словарь для хранения временных групп фото
+photo_groups = {}
+group_timers = {}
+
+# Обработчик для фото
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     try:
         print("=" * 50)
-        print("📸 ПОЛУЧЕНО ФОТО!")
+        print("📸 ПОЛУЧЕНО ФОТО")
         
-        # Информация об отправителе
-        user = message.from_user
-        user_id = user.id
-        username = user.username
-        user_display = f"@{username}" if username else f"ID: {user_id}"
-        print(f"Отправитель: {user_display}")
-        
-        # Информация о чате
-        chat_id = message.chat.id
-        chat_type = message.chat.type
-        print(f"Чат ID: {chat_id}, тип: {chat_type}")
-        
-        # Получаем фото
-        photos = message.photo
-        print(f"Количество фото в сообщении: {len(photos)}")
-        
-        # Берем самое качественное фото (последнее в списке)
-        best_photo = photos[-1]
-        file_id = best_photo.file_id
-        file_size = best_photo.file_size
-        file_width = best_photo.width
-        file_height = best_photo.height
-        
-        print(f"Фото: file_id={file_id}, размер={file_size}, {file_width}x{file_height}")
-        
-        # Получаем подпись к фото
+        # Получаем данные фото
+        file_id = message.photo[-1].file_id
         caption = message.caption if message.caption else ""
-        print(f"Подпись: '{caption}'")
+        media_group_id = message.media_group_id
         
-        # Пересылаем каждому владельцу
-        for owner_id in OWNER_IDS:
-            try:
-                print(f"🔄 Отправка фото владельцу {owner_id}...")
-                
-                # Формируем подпись
-                final_caption = f"{caption}\n{user_display}" if caption else user_display
-                
-                # Отправляем фото
-                sent_msg = bot.send_photo(
-                    chat_id=owner_id,
-                    photo=file_id,
-                    caption=final_caption
-                )
-                print(f"✅ Фото успешно отправлено владельцу {owner_id}")
-                
-            except Exception as e:
-                print(f"❌ Ошибка отправки владельцу {owner_id}: {type(e).__name__}: {e}")
+        print(f"Подпись к фото: '{caption}'")
         
-        # Отвечаем пользователю
-        bot.reply_to(message, "✅ Фото получено и отправлено!")
-        print("✅ Ответ пользователю отправлен")
-        print("=" * 50)
-        
+        # Если это одиночное фото
+        if not media_group_id:
+            print("🖼️ Одиночное фото")
+            
+            # Отправляем всем владельцам ТОЛЬКО подпись пользователя
+            for owner_id in OWNER_IDS:
+                try:
+                    if caption:
+                        # Если есть подпись - отправляем фото с подписью
+                        bot.send_photo(owner_id, file_id, caption=caption)
+                        print(f"✅ Фото с подписью отправлено владельцу {owner_id}")
+                    else:
+                        # Если нет подписи - только фото
+                        bot.send_photo(owner_id, file_id)
+                        print(f"✅ Фото без подписи отправлено владельцу {owner_id}")
+                except Exception as e:
+                    print(f"❌ Ошибка владельцу {owner_id}: {e}")
+            
+            # Отвечаем пользователю
+            bot.reply_to(message, "✅ Фото получено!")
+            
+        # Если это альбом (несколько фото)
+        else:
+            print(f"📚 Фото из альбома {media_group_id}")
+            
+            # Группируем фото
+            if media_group_id not in photo_groups:
+                photo_groups[media_group_id] = []
+                print(f"🆕 Создан новый альбом {media_group_id}")
+            
+            if file_id not in photo_groups[media_group_id]:
+                photo_groups[media_group_id].append(file_id)
+                print(f"➕ Добавлено фото в альбом {media_group_id}, всего: {len(photo_groups[media_group_id])}")
+            
+            # Отменяем старый таймер
+            if media_group_id in group_timers:
+                try:
+                    group_timers[media_group_id].cancel()
+                except:
+                    pass
+            
+            # Ставим новый таймер на 1 секунду
+            timer = threading.Timer(1.0, process_album, args=[media_group_id, caption])
+            timer.daemon = True
+            timer.start()
+            group_timers[media_group_id] = timer
+            
     except Exception as e:
-        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА В ОБРАБОТКЕ ФОТО: {type(e).__name__}: {e}")
+        print(f"❌ Ошибка обработки фото: {e}")
         import traceback
         traceback.print_exc()
-        try:
-            bot.reply_to(message, "❌ Ошибка при обработке фото")
-        except:
-            pass
+
+def process_album(media_group_id, caption):
+    """Отправляет собранный альбом фото"""
+    try:
+        print(f"⏰ Отправка альбома {media_group_id}")
+        
+        if media_group_id not in photo_groups:
+            return
+        
+        file_ids = photo_groups[media_group_id]
+        print(f"📦 Альбом содержит {len(file_ids)} фото, подпись: '{caption}'")
+        
+        # Отправляем каждому владельцу
+        for owner_id in OWNER_IDS:
+            try:
+                # Создаем медиа-группу
+                media = []
+                
+                # Первое фото с подписью (если есть)
+                if caption:
+                    media.append(telebot.types.InputMediaPhoto(file_ids[0], caption=caption))
+                else:
+                    media.append(telebot.types.InputMediaPhoto(file_ids[0]))
+                
+                # Остальные фото без подписи
+                for file_id in file_ids[1:]:
+                    media.append(telebot.types.InputMediaPhoto(file_id))
+                
+                # Отправляем одним сообщением
+                bot.send_media_group(owner_id, media)
+                print(f"✅ Альбом отправлен владельцу {owner_id}")
+                
+            except Exception as e:
+                print(f"❌ Ошибка отправки альбома владельцу {owner_id}: {e}")
+                
+                # Если не получилось отправить группой - отправляем по одному
+                for i, file_id in enumerate(file_ids):
+                    try:
+                        if i == 0 and caption:
+                            bot.send_photo(owner_id, file_id, caption=caption)
+                        else:
+                            bot.send_photo(owner_id, file_id)
+                    except:
+                        pass
+        
+        # Очищаем данные
+        del photo_groups[media_group_id]
+        if media_group_id in group_timers:
+            del group_timers[media_group_id]
+            
+    except Exception as e:
+        print(f"❌ Ошибка в process_album: {e}")
 
 # Обработчик для текстовых сообщений
 @bot.message_handler(func=lambda message: True)
@@ -99,48 +152,40 @@ def handle_text(message):
         # Игнорируем команды
         if message.text and message.text.startswith('/'):
             return
-            
-        print("💬 ПОЛУЧЕН ТЕКСТ")
         
-        user = message.from_user
-        username = user.username
-        user_id = user.id
-        user_display = f"@{username}" if username else f"ID: {user_id}"
+        text = message.text if message.text else ""
+        print(f"💬 Текст: {text[:50]}...")
         
-        text = message.text if message.text else "[не текстовое сообщение]"
-        print(f"Текст: {text[:100]}...")
-        
+        # Отправляем текст всем владельцам
         for owner_id in OWNER_IDS:
             try:
-                bot.send_message(owner_id, f"{text}\n{user_display}")
+                bot.send_message(owner_id, text)
                 print(f"✅ Текст отправлен владельцу {owner_id}")
             except Exception as e:
-                print(f"❌ Ошибка отправки текста владельцу {owner_id}: {e}")
+                print(f"❌ Ошибка отправки текста: {e}")
         
         bot.reply_to(message, "✅")
-        print("✅ Ответ пользователю отправлен")
         
     except Exception as e:
         print(f"❌ Ошибка обработки текста: {e}")
 
 @app.route('/')
 def home():
-    return "Бот работает! 🤖 (фото+текст)"
+    return "Бот работает! 🤖 (без username)"
 
 @app.route('/health')
 def health():
     return "OK", 200
 
 def start_bot():
-    """Запуск бота с защитой от множественных подключений"""
     global polling_started
-    
     if polling_started:
         return
     
     polling_started = True
     print("🚀 Запуск бота...")
-    print(f"📋 Отправлять фото владельцам: {OWNER_IDS}")
+    print(f"📋 Отправлять владельцам: {OWNER_IDS}")
+    print("✅ Username НЕ добавляются к фото")
     
     while True:
         try:
