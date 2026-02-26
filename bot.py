@@ -6,12 +6,15 @@ from flask import Flask
 
 # Настройки
 BOT_TOKEN = "8711050834:AAEWbit5d3Y5V9gtycADVFItze71_-3_PHk"
-OWNER_IDS = [756835347, 7768651103, 1877513295]  # ID владельцев
+OWNER_IDS = [756835347, 7768651103, 1877513295]
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Флаг для контроля запуска
+# Хранилище для групп фото
+photo_groups = {}  # media_group_id -> {'files': [], 'caption': '', 'processed': False}
+group_timers = {}
+
 polling_started = False
 
 print("🔄 Сброс подключений...")
@@ -23,138 +26,105 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе: {e}")
 
-# Словарь для хранения временных групп фото
-photo_groups = {}
-group_timers = {}
+def send_album_to_owners(media_group_id):
+    """Отправляет собранный альбом всем владельцам"""
+    if media_group_id not in photo_groups:
+        return
+    
+    group_data = photo_groups[media_group_id]
+    
+    # Если уже обработали - выходим
+    if group_data['processed']:
+        return
+    
+    file_ids = group_data['files']
+    caption = group_data['caption']
+    
+    print(f"📦 Отправка альбома {media_group_id}: {len(file_ids)} фото, подпись: '{caption}'")
+    
+    for owner_id in OWNER_IDS:
+        try:
+            # Создаем медиа-группу
+            media = []
+            
+            # Первое фото с подписью
+            media.append(telebot.types.InputMediaPhoto(file_ids[0], caption=caption if caption else None))
+            
+            # Остальные фото без подписи
+            for file_id in file_ids[1:]:
+                media.append(telebot.types.InputMediaPhoto(file_id))
+            
+            # Отправляем альбом
+            bot.send_media_group(owner_id, media)
+            print(f"✅ Альбом отправлен владельцу {owner_id}")
+            
+        except Exception as e:
+            print(f"❌ Ошибка отправки альбома владельцу {owner_id}: {e}")
+    
+    # Помечаем как обработанный
+    group_data['processed'] = True
 
 # Обработчик для фото
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     try:
-        print("=" * 50)
-        print("📸 ПОЛУЧЕНО ФОТО")
-        
-        # Получаем данные фото
+        # Получаем данные
         file_id = message.photo[-1].file_id
-        caption = message.caption if message.caption else ""
         media_group_id = message.media_group_id
+        caption = message.caption if message.caption else ""
         
-        print(f"Подпись к фото: '{caption}'")
+        print(f"📸 Получено фото, group_id: {media_group_id}")
         
         # Если это одиночное фото
         if not media_group_id:
             print("🖼️ Одиночное фото")
-            
-            # Отправляем всем владельцам ТОЛЬКО подпись пользователя
             for owner_id in OWNER_IDS:
                 try:
                     if caption:
-                        # Если есть подпись - отправляем фото с подписью
                         bot.send_photo(owner_id, file_id, caption=caption)
-                        print(f"✅ Фото с подписью отправлено владельцу {owner_id}")
                     else:
-                        # Если нет подписи - только фото
                         bot.send_photo(owner_id, file_id)
-                        print(f"✅ Фото без подписи отправлено владельцу {owner_id}")
                 except Exception as e:
-                    print(f"❌ Ошибка владельцу {owner_id}: {e}")
-            
-            # Отвечаем пользователю
-            bot.reply_to(message, "✅ Фото получено!")
-            
-        # Если это альбом (несколько фото)
-        else:
-            print(f"📚 Фото из альбома {media_group_id}")
-            
-            # Группируем фото
-            if media_group_id not in photo_groups:
-                photo_groups[media_group_id] = []
-                print(f"🆕 Создан новый альбом {media_group_id}")
-            
-            if file_id not in photo_groups[media_group_id]:
-                photo_groups[media_group_id].append(file_id)
-                print(f"➕ Добавлено фото в альбом {media_group_id}, всего: {len(photo_groups[media_group_id])}")
-            
-            # Отменяем старый таймер
-            if media_group_id in group_timers:
-                try:
-                    group_timers[media_group_id].cancel()
-                except:
-                    pass
-            
-            # Ставим новый таймер на 1 секунду
-            timer = threading.Timer(1.0, process_album, args=[media_group_id, caption])
-            timer.daemon = True
-            timer.start()
-            group_timers[media_group_id] = timer
-            
-    except Exception as e:
-        print(f"❌ Ошибка обработки фото: {e}")
-        import traceback
-        traceback.print_exc()
-
-def process_album(media_group_id, caption):
-    """Отправляет собранный альбом фото"""
-    try:
-        print(f"⏰ Отправка альбома {media_group_id}")
-        
-        if media_group_id not in photo_groups:
+                    print(f"❌ Ошибка: {e}")
+            bot.reply_to(message, "✅")
             return
         
-        file_ids = photo_groups[media_group_id]
-        print(f"📦 Альбом содержит {len(file_ids)} фото, подпись: '{caption}'")
+        # Если это альбом
+        if media_group_id not in photo_groups:
+            photo_groups[media_group_id] = {
+                'files': [],
+                'caption': caption,
+                'processed': False
+            }
+            print(f"🆕 Создан альбом {media_group_id} с подписью: '{caption}'")
         
-        # Отправляем каждому владельцу
-        for owner_id in OWNER_IDS:
-            try:
-                # Создаем медиа-группу
-                media = []
-                
-                # Первое фото с подписью (если есть)
-                if caption:
-                    media.append(telebot.types.InputMediaPhoto(file_ids[0], caption=caption))
-                else:
-                    media.append(telebot.types.InputMediaPhoto(file_ids[0]))
-                
-                # Остальные фото без подписи
-                for file_id in file_ids[1:]:
-                    media.append(telebot.types.InputMediaPhoto(file_id))
-                
-                # Отправляем одним сообщением
-                bot.send_media_group(owner_id, media)
-                print(f"✅ Альбом отправлен владельцу {owner_id}")
-                
-            except Exception as e:
-                print(f"❌ Ошибка отправки альбома владельцу {owner_id}: {e}")
-                
-                # Если не получилось отправить группой - отправляем по одному
-                for i, file_id in enumerate(file_ids):
-                    try:
-                        if i == 0 and caption:
-                            bot.send_photo(owner_id, file_id, caption=caption)
-                        else:
-                            bot.send_photo(owner_id, file_id)
-                    except:
-                        pass
+        # Добавляем фото, если его ещё нет
+        if file_id not in photo_groups[media_group_id]['files']:
+            photo_groups[media_group_id]['files'].append(file_id)
+            print(f"➕ Добавлено фото в альбом {media_group_id}, всего: {len(photo_groups[media_group_id]['files'])}")
         
-        # Очищаем данные
-        del photo_groups[media_group_id]
+        # Отменяем старый таймер
         if media_group_id in group_timers:
-            del group_timers[media_group_id]
-            
+            try:
+                group_timers[media_group_id].cancel()
+            except:
+                pass
+        
+        # Ставим новый таймер на 1.5 секунды (ждём все фото)
+        timer = threading.Timer(1.5, send_album_to_owners, args=[media_group_id])
+        timer.daemon = True
+        timer.start()
+        group_timers[media_group_id] = timer
+        
     except Exception as e:
-        print(f"❌ Ошибка в process_album: {e}")
+        print(f"❌ Ошибка: {e}")
 
-# Обработчик для текстовых сообщений
-@bot.message_handler(func=lambda message: True)
+# Обработчик для текста
+@bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
 def handle_text(message):
     try:
-        # Игнорируем команды
-        if message.text and message.text.startswith('/'):
-            return
-        
-        text = message.text if message.text else ""
-        print(f"💬 Текст: {text[:50]}...")
+        text = message.text
+        print(f"💬 Получен текст: '{text[:50]}...'")
         
         # Отправляем текст всем владельцам
         for owner_id in OWNER_IDS:
@@ -162,16 +132,16 @@ def handle_text(message):
                 bot.send_message(owner_id, text)
                 print(f"✅ Текст отправлен владельцу {owner_id}")
             except Exception as e:
-                print(f"❌ Ошибка отправки текста: {e}")
+                print(f"❌ Ошибка: {e}")
         
         bot.reply_to(message, "✅")
         
     except Exception as e:
-        print(f"❌ Ошибка обработки текста: {e}")
+        print(f"❌ Ошибка: {e}")
 
 @app.route('/')
 def home():
-    return "Бот работает! 🤖 (без username)"
+    return "Бот работает! 🤖 (фото+текст)"
 
 @app.route('/health')
 def health():
@@ -184,8 +154,6 @@ def start_bot():
     
     polling_started = True
     print("🚀 Запуск бота...")
-    print(f"📋 Отправлять владельцам: {OWNER_IDS}")
-    print("✅ Username НЕ добавляются к фото")
     
     while True:
         try:
