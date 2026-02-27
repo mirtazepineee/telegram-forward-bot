@@ -26,6 +26,31 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе: {e}")
 
+# ============================================
+# КОМАНДА /START
+# ============================================
+@bot.message_handler(commands=['start'])
+def handle_start(message):
+    """Отправляет приветственное сообщение с инструкцией"""
+    try:
+        welcome_text = """
+Пожалуйста, придерживайтесь следующей формы:
+
+· Фото:
+· Цена:
+· Состояние:
+· Ваш юзернейм (для связи):
+        """
+        
+        bot.reply_to(message, welcome_text.strip())
+        print(f"✅ Отправлено приветствие пользователю {message.from_user.id}")
+        
+    except Exception as e:
+        print(f"❌ Ошибка в /start: {e}")
+
+# ============================================
+# ОБРАБОТЧИК ФОТО
+# ============================================
 def send_album(media_group_id):
     """Отправляет альбом всем владельцам и отвечает пользователю"""
     try:
@@ -98,7 +123,6 @@ def send_album(media_group_id):
         import traceback
         traceback.print_exc()
 
-# Обработчик для фото
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     try:
@@ -187,7 +211,9 @@ def handle_photo(message):
         except:
             pass
 
-# Обработчик для текста
+# ============================================
+# ОБРАБОТЧИК ТЕКСТА
+# ============================================
 @bot.message_handler(func=lambda message: message.text and not message.text.startswith('/'))
 def handle_text(message):
     try:
@@ -215,14 +241,20 @@ def handle_text(message):
         except:
             pass
 
+# ============================================
+# ВЕБ-СЕРВЕР
+# ============================================
 @app.route('/')
 def home():
-    return "Бот работает! 🤖 (с галочками)"
+    return "Бот работает! 🤖 (с /start командой)"
 
 @app.route('/health')
 def health():
     return "OK", 200
 
+# ============================================
+# ЗАПУСК БОТА
+# ============================================
 def start_bot():
     global polling_started
     if polling_started:
